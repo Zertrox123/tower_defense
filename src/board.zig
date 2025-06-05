@@ -1,148 +1,115 @@
 const std = @import("std");
 
-pub const TileType = enum {
-    Path,
-    Buildable,
-    Scenery,
-};
-
-// Vec2u32 for coordinates
-pub const Vec2u32 = struct {
-    x: u32,
-    y: u32,
+const Tile = enum {
+    empty,
+    path,
+    tower,
+    obstacle,
 };
 
 pub const Board = struct {
     width: u32,
     height: u32,
-    tiles: []TileType,
-    occupied: []bool,
-    path_waypoints: std.ArrayList(Vec2u32), // Added for enemy pathfinding
+    tiles: []Tile,
     allocator: std.mem.Allocator,
 
-    pub fn createBoard(width: u32, height: u32, allocator: std.mem.Allocator) !Board {
-        const num_tiles = width * height;
-        const tiles_data = try allocator.alloc(TileType, num_tiles);
-        errdefer allocator.free(tiles_data);
-
-        const occupied_data = try allocator.alloc(bool, num_tiles);
-        errdefer allocator.free(occupied_data);
-
-        var path_waypoints_list = std.ArrayList(Vec2u32).init(allocator);
-        errdefer path_waypoints_list.deinit(); // Ensure this is deinitialized if subsequent operations fail
-
-        // Initialize all tiles to Scenery and not occupied
-        for (0..num_tiles) |i| {
-            tiles_data[i] = TileType.Scenery;
-            occupied_data[i] = false;
-        }
-
-        // Simple horizontal path in the middle row
-        if (height > 0) {
-            const middle_row = height / 2;
-            for (0..width) |x| {
-                const index = middle_row * width + x;
-                if (index < num_tiles) {
-                    tiles_data[index] = TileType.Path;
-                    // Add waypoint for each tile on the path
-                    try path_waypoints_list.append(Vec2u32{ .x = @intCast(x), .y = middle_row });
-                }
-            }
-
-            // Designate tiles adjacent to the path as Buildable
-            if (middle_row > 0) {
-                const row_above = middle_row - 1;
-                for (0..width) |x| {
-                    const index = row_above * width + x;
-                    if (index < num_tiles) {
-                        tiles_data[index] = TileType.Buildable;
-                    }
-                }
-            }
-            if (middle_row < height - 1) {
-                const row_below = middle_row + 1;
-                for (0..width) |x| {
-                    const index = row_below * width + x;
-                    if (index < num_tiles) {
-                        tiles_data[index] = TileType.Buildable;
-                    }
-                }
-            }
+    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !Board {
+        const tiles_count = width * height;
+        const tiles_buffer = try allocator.alloc(Tile, tiles_count);
+        for (tiles_buffer) |*tile| {
+            tile.* = Tile.empty;
         }
 
         return Board{
             .width = width,
             .height = height,
-            .tiles = tiles_data,
-            .occupied = occupied_data,
-            .path_waypoints = path_waypoints_list,
+            .tiles = tiles_buffer,
             .allocator = allocator,
         };
     }
 
-    pub fn destroy(self: *Board) void {
+    pub fn deinit(self: *Board) void {
         self.allocator.free(self.tiles);
-        self.allocator.free(self.occupied);
-        self.path_waypoints.deinit(); // Deinitialize the new ArrayList
-        self.* = undefined;
+        self.* = undefined; // To catch use-after-free
     }
 
-    pub fn isTileBuildableAndUnoccupied(self: Board, x: u32, y: u32) bool {
+    pub fn getTile(self: Board, x: u32, y: u32) ?Tile {
+        if (x >= self.width or y >= self.height) {
+            return null;
+        }
+        return self.tiles[y * self.width + x];
+    }
+
+    pub fn setTile(self: *Board, x: u32, y: u32, tile: Tile) bool {
         if (x >= self.width or y >= self.height) {
             return false;
         }
-        const index = y * self.width + x;
-        return self.tiles[index] == TileType.Buildable and !self.occupied[index];
+        self.tiles[y * self.width + x] = tile;
+        return true;
     }
 
-    pub fn setTileOccupied(self: *Board, x: u32, y: u32, is_occupied: bool) void {
-        if (x >= self.width or y >= self.height) {
-            return;
-        }
-        const index = y * self.width + x;
-        self.occupied[index] = is_occupied;
+    // Basic pathfinding placeholder - replace with actual A* or similar
+    pub fn findPath(self: Board, start_x: u32, start_y: u32, end_x: u32, end_y: u32) ?std.ArrayList(struct {x: u32, y: u32}) {
+        // Placeholder: For now, just returns a straight line if possible, or null
+        // This needs a proper pathfinding algorithm (e.g., A*)
+        _ = start_x;
+        _ = start_y;
+        _ = end_x;
+        _ = end_y;
+        std.debug.print("Warning: findPath is not implemented yet.\n", .{});
+        return null;
+    }
+
+    pub fn isValidCoordinate(self: Board, x: u32, y: u32) bool {
+        return x < self.width and y < self.height;
     }
 };
 
-test "Board.createBoard path_waypoints" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+test "board initialization and deinitialization" {
+    const allocator = std.testing.allocator;
+    var board = try Board.init(allocator, 10, 10);
+    defer board.deinit();
 
-    const test_width: u32 = 10;
-    const test_height: u32 = 5;
-    var board = try Board.createBoard(test_width, test_height, allocator);
-    defer board.destroy();
+    try std.testing.expectEqual(@as(u32, 10), board.width);
+    try std.testing.expectEqual(@as(u32, 10), board.height);
+    try std.testing.expectEqual(@as(usize, 100), board.tiles.len);
 
-    // Path on row 2 (5/2)
-    const expected_middle_row = test_height / 2;
-    try std.testing.expectEqual(board.path_waypoints.items.len, test_width);
-    for (board.path_waypoints.items, 0..) |wp, i| {
-        try std.testing.expectEqual(@as(usize, wp.x), i); // Cast wp.x (u32) to usize for comparison with i (usize)
-        try std.testing.expectEqual(wp.y, expected_middle_row);
+    for (board.tiles) |tile| {
+        try std.testing.expectEqual(Tile.empty, tile);
     }
 }
 
-test "Board.isTileBuildableAndUnoccupied and setTileOccupied" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+test "board getTile and setTile" {
+    const allocator = std.testing.allocator;
+    var board = try Board.init(allocator, 5, 5);
+    defer board.deinit();
 
-    var board = try Board.createBoard(10, 5, allocator); // Path on row 2, Buildable on rows 1 and 3
-    defer board.destroy();
+    // Test setting a tile
+    const set_success = board.setTile(2, 3, Tile.path);
+    try std.testing.expect(set_success);
 
-    try std.testing.expect(board.isTileBuildableAndUnoccupied(0, 1));
-    try std.testing.expect(!board.isTileBuildableAndUnoccupied(0, 2));
-    try std.testing.expectEqual(board.tiles[2 * 10 + 0], TileType.Path);
-    try std.testing.expect(!board.isTileBuildableAndUnoccupied(0, 0));
-    try std.testing.expectEqual(board.tiles[0], TileType.Scenery);
+    // Test getting the tile
+    const tile = board.getTile(2, 3);
+    try std.testing.expect(tile != null);
+    try std.testing.expectEqual(Tile.path, tile.?);
 
-    board.setTileOccupied(0, 1, true);
-    try std.testing.expect(!board.isTileBuildableAndUnoccupied(0, 1));
+    // Test out of bounds get
+    const oob_tile = board.getTile(10, 10);
+    try std.testing.expect(oob_tile == null);
 
-    board.setTileOccupied(0, 1, false);
-    try std.testing.expect(board.isTileBuildableAndUnoccupied(0, 1));
+    // Test out of bounds set
+    const oob_set_success = board.setTile(10, 10, Tile.tower);
+    try std.testing.expect(!oob_set_success);
+}
 
-    board.setTileOccupied(0, 2, true);
-    try std.testing.expect(!board.isTileBuildableAndUnoccupied(0, 2));
+test "isValidCoordinate" {
+    const allocator = std.testing.allocator;
+    var board = try Board.init(allocator, 8, 6);
+    defer board.deinit();
+
+    try std.testing.expect(board.isValidCoordinate(0, 0));
+    try std.testing.expect(board.isValidCoordinate(7, 5));
+    try std.testing.expect(!board.isValidCoordinate(8, 0));
+    try std.testing.expect(!board.isValidCoordinate(0, 6));
+    try std.testing.expect(!board.isValidCoordinate(8, 6));
 }
